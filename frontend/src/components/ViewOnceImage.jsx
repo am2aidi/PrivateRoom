@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Eye, EyeOff, ShieldAlert } from 'lucide-react';
+import { Eye, EyeOff } from 'lucide-react';
 import { decryptBuffer } from '../crypto/webcrypto';
 
 export function ViewOnceImage({
@@ -13,7 +13,7 @@ export function ViewOnceImage({
   const [isPressing, setIsPressing] = useState(false);
   const [decryptedBuffer, setDecryptedBuffer] = useState(null);
   const [viewTimeRemaining, setViewTimeRemaining] = useState(30);
-  const [isBlownOut, setIsBlownOut] = useState(false); // Screen blank flag on screenshot attempt
+  const [isBlownOut, setIsBlownOut] = useState(false);
 
   const canvasRef = useRef(null);
   const timerRef = useRef(null);
@@ -40,7 +40,7 @@ export function ViewOnceImage({
     return () => { isMounted = false; };
   }, [imagePayload, secretKey]);
 
-  // Handle 30-Second Active View Timer while holding
+  // 30-Second Active View Timer while holding
   useEffect(() => {
     if (isPressing && !isOpened && !isBlownOut) {
       setViewTimeRemaining(30);
@@ -52,7 +52,7 @@ export function ViewOnceImage({
         setViewTimeRemaining(remaining);
 
         if (remaining <= 0) {
-          handleForceClose('Timer expired');
+          handleFinishView('30s Timer expired');
         }
       }, 500);
 
@@ -62,7 +62,7 @@ export function ViewOnceImage({
     }
   }, [isPressing, isOpened, isBlownOut]);
 
-  // Canvas Drawing & Watermark
+  // Canvas Rendering & Moving Watermark
   useEffect(() => {
     if (!isPressing || !decryptedBuffer || isOpened || isBlownOut) {
       if (canvasRef.current) {
@@ -90,16 +90,14 @@ export function ViewOnceImage({
       canvas.height = img.height;
 
       const renderFrame = () => {
-        if (!isPressing || !document.hasFocus() || isBlownOut) {
+        if (!isPressing || isBlownOut) {
           ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           return;
         }
 
-        // Draw image
         ctx.drawImage(img, 0, 0);
 
-        // Overlay Moving Watermark
         ctx.save();
         ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
         ctx.font = 'bold 18px sans-serif';
@@ -131,7 +129,7 @@ export function ViewOnceImage({
     };
   }, [isPressing, decryptedBuffer, isOpened, isBlownOut, roomId]);
 
-  // Screenshot Detection while holding view-once image
+  // Screenshot shortcut detection
   useEffect(() => {
     if (!isPressing || isOpened) return;
 
@@ -141,31 +139,21 @@ export function ViewOnceImage({
         (e.metaKey && e.shiftKey && (e.key === '3' || e.key === '4' || e.key === '5')) ||
         (e.ctrlKey && e.key === 'p')
       ) {
-        triggerScreenshotProtection('PrintScreen key');
+        triggerScreenshotAlert('PrintScreen key');
       }
     };
 
-    const handleBlur = () => {
-      triggerScreenshotProtection('Window focus lost / screen capture');
-    };
-
     window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('blur', handleBlur);
-    document.addEventListener('visibilitychange', handleBlur);
-
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('blur', handleBlur);
-      document.removeEventListener('visibilitychange', handleBlur);
     };
   }, [isPressing, isOpened]);
 
-  // Blank out image and alert room on screenshot attempt
-  const triggerScreenshotProtection = (reason) => {
+  const triggerScreenshotAlert = (reason) => {
     setIsBlownOut(true);
     setIsPressing(false);
     setIsOpened(true);
-    setDecryptedBuffer(null); // PURGE RAM IMMEDIATELY
+    setDecryptedBuffer(null);
 
     if (onScreenshotAlert) {
       onScreenshotAlert(imagePayload.id, reason);
@@ -175,14 +163,28 @@ export function ViewOnceImage({
     }
   };
 
-  const handleForceClose = (reason) => {
-    setIsPressing(false);
-    setIsOpened(true);
-    setDecryptedBuffer(null);
+  const handleFinishView = (reason) => {
+    if (isPressing) {
+      setIsPressing(false);
+      setIsOpened(true);
+      setDecryptedBuffer(null); // PURGE RAM IMMEDIATELY
 
-    if (onOpenedSignal) {
-      onOpenedSignal(imagePayload.id);
+      if (onOpenedSignal) {
+        onOpenedSignal(imagePayload.id);
+      }
     }
+  };
+
+  const handlePressStart = (e) => {
+    if (e.cancelable) e.preventDefault();
+    if (!isOpened && !isBlownOut) {
+      setIsPressing(true);
+    }
+  };
+
+  const handlePressEnd = (e) => {
+    if (e.cancelable) e.preventDefault();
+    handleFinishView('Released');
   };
 
   if (isOpened || imagePayload.status === 'opened') {
@@ -199,14 +201,15 @@ export function ViewOnceImage({
   return (
     <div
       className="view-once-box"
-      onMouseDown={() => setIsPressing(true)}
-      onMouseUp={() => handleForceClose('Released')}
-      onMouseLeave={() => handleForceClose('Mouse left')}
-      onTouchStart={() => setIsPressing(true)}
-      onTouchEnd={() => handleForceClose('Touch ended')}
-      onTouchCancel={() => handleForceClose('Touch cancelled')}
+      onMouseDown={handlePressStart}
+      onMouseUp={handlePressEnd}
+      onMouseLeave={handlePressEnd}
+      onTouchStart={handlePressStart}
+      onTouchEnd={handlePressEnd}
+      onTouchCancel={handlePressEnd}
       style={{
-        border: isPressing ? '1px solid var(--color-blue-status)' : '1px solid var(--card-border)'
+        border: isPressing ? '1px solid var(--color-blue-status)' : '1px solid var(--card-border)',
+        touchAction: 'none'
       }}
     >
       <canvas
