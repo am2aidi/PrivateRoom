@@ -1,0 +1,21 @@
+{
+  "name": "private-room",
+  "version": "1.0.0",
+  "description": "Private Room: Private Chat Website with No Records",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev:backend": "node --watch backend/server.js",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend"
+  },
+  "keywords": [
+    "privacy",
+    "e2ee",
+    "zero-records",
+    "webrtc",
+    "voice-changer",
+    "view-once"
+  ],
+  "author": "Zaidi (CST)",
+  "license": "MIT"
+}
