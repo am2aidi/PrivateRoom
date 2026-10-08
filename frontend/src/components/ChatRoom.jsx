@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Shield, Image as ImageIcon, Phone, Send, LogOut } from 'lucide-react';
+import { Shield, Image as ImageIcon, Phone, Send, LogOut, Users, AlertTriangle } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { encryptText, encryptBuffer } from '../crypto/webcrypto';
 import { stripExifData } from '../utils/screenshotGuard';
@@ -9,18 +9,23 @@ export function ChatRoom({
   secretKey,
   safetyCode,
   messages,
+  roomMembers,
   peerIsTyping,
+  userAvatar,
+  userNickname,
   onSendMessage,
   onSendImage,
   onTypingStatus,
   onStartCall,
   onLeaveRoom,
   onOpenedImage,
-  onMessageExpired,
-  connectionState
+  onScreenshotAlert,
+  onMessageExpired
 }) {
   const [inputText, setInputText] = useState('');
   const [deleteTimerSeconds, setDeleteTimerSeconds] = useState(10);
+  const [showMembersList, setShowMembersList] = useState(false);
+
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
@@ -41,9 +46,17 @@ export function ChatRoom({
     }, 1500);
   };
 
+  // Handle KeyDown Enter submit
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend(e);
+    }
+  };
+
   // Handle Text Send
   const handleSend = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
     if (!inputText.trim()) return;
 
     const textToSend = inputText.trim();
@@ -54,23 +67,18 @@ export function ChatRoom({
       const encrypted = await encryptText(textToSend, secretKey);
       onSendMessage(textToSend, encrypted, deleteTimerSeconds);
     } catch (err) {
-      console.error('Failed to encrypt text message:', err);
+      console.error('Failed to encrypt message:', err);
     }
   };
 
-  // Handle View-Once Image Select & Strip EXIF
+  // Handle View-Once Image Select
   const handleImageSelect = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      // 1. Strip EXIF using canvas
       const cleanArrayBuffer = await stripExifData(file);
-
-      // 2. Encrypt with secret key
       const encrypted = await encryptBuffer(cleanArrayBuffer, secretKey);
-
-      // 3. Dispatch view-once payload
       onSendImage(encrypted);
     } catch (err) {
       console.error('Failed to process image:', err);
@@ -99,8 +107,8 @@ export function ChatRoom({
         zIndex: 10
       }}>
         
-        {/* Safety Code Mnemonic Fingerprint */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {/* Safety Code Mnemonic & Member Count */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div style={{
             padding: '6px 10px',
             backgroundColor: 'rgba(255, 255, 255, 0.05)',
@@ -111,10 +119,30 @@ export function ChatRoom({
             gap: '6px'
           }}>
             <Shield size={14} color="#8e8e98" />
-            <span style={{ fontSize: '12px', fontWeight: '500', color: '#ffffff', letterSpacing: '0.5px' }}>
+            <span style={{ fontSize: '12px', fontWeight: '500', color: '#ffffff' }}>
               {safetyCode}
             </span>
           </div>
+
+          {/* Members Toggle Button */}
+          <button
+            type="button"
+            onClick={() => setShowMembersList(!showMembersList)}
+            style={{
+              padding: '6px 10px',
+              backgroundColor: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid var(--card-border)',
+              borderRadius: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              color: '#ffffff',
+              fontSize: '12px'
+            }}
+          >
+            <Users size={14} />
+            <span>{roomMembers.length}/10</span>
+          </button>
         </div>
 
         {/* Live Indicator & Leave Action */}
@@ -136,6 +164,35 @@ export function ChatRoom({
 
       </header>
 
+      {/* Members Drawer Overlay (Up to 10 users) */}
+      {showMembersList && (
+        <div style={{
+          backgroundColor: '#14141a',
+          borderBottom: '1px solid var(--card-border)',
+          padding: '12px 16px',
+          display: 'flex',
+          gap: '12px',
+          overflowX: 'auto'
+        }}>
+          {roomMembers.map((m) => (
+            <div key={m.clientId} style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 10px',
+              backgroundColor: 'rgba(255, 255, 255, 0.06)',
+              borderRadius: '16px',
+              fontSize: '13px',
+              whiteSpace: 'nowrap'
+            }}>
+              <span style={{ fontSize: '16px' }}>{m.avatar}</span>
+              <span style={{ fontWeight: '500' }}>{m.nickname}</span>
+              <span className="live-dot" style={{ width: '6px', height: '6px', marginLeft: '2px' }} />
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Middle Message Feed */}
       <main style={{
         flex: 1,
@@ -148,53 +205,79 @@ export function ChatRoom({
         {/* Encrypted Session Banner */}
         <div style={{
           textAlign: 'center',
-          margin: '12px 0 24px 0',
+          margin: '8px 0 20px 0',
           padding: '10px',
           backgroundColor: 'rgba(255, 255, 255, 0.03)',
           border: '1px solid var(--card-border)',
           borderRadius: '12px'
         }}>
           <p style={{ fontSize: '12px', color: '#8e8e98' }}>
-            🔒 End-to-end encrypted session. Verify 4-word safety code above with your partner.
+            🔒 End-to-end encrypted session • Max 10 users • Verify 4-word code above.
           </p>
         </div>
 
-        {/* Messages List */}
-        {messages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            msg={msg}
-            isOwn={msg.isOwn}
-            secretKey={secretKey}
-            roomId={roomId}
-            onOpenedImage={onOpenedImage}
-            onMessageExpired={onMessageExpired}
-          />
-        ))}
+        {/* Messages List & System Notifications */}
+        {messages.map((msg) => {
+          if (msg.type === 'system') {
+            return (
+              <div key={msg.id} style={{
+                textAlign: 'center',
+                margin: '8px 0',
+                padding: '6px 12px',
+                borderRadius: '12px',
+                backgroundColor: msg.isWarning ? 'rgba(255, 82, 82, 0.15)' : 'rgba(255, 255, 255, 0.04)',
+                border: msg.isWarning ? '1px solid rgba(255, 82, 82, 0.3)' : '1px solid var(--card-border)',
+                color: msg.isWarning ? 'var(--color-red-warning)' : '#8e8e98',
+                fontSize: '12px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                alignSelf: 'center'
+              }}>
+                {msg.isWarning && <AlertTriangle size={14} />}
+                <span>{msg.text}</span>
+              </div>
+            );
+          }
+
+          return (
+            <MessageBubble
+              key={msg.id}
+              msg={msg}
+              isOwn={msg.isOwn}
+              secretKey={secretKey}
+              roomId={roomId}
+              onOpenedImage={onOpenedImage}
+              onScreenshotAlert={onScreenshotAlert}
+              onMessageExpired={onMessageExpired}
+            />
+          );
+        })}
 
         <div ref={messagesEndRef} />
       </main>
 
-      {/* Above Input: Typing Indicator (STRICT GREEN RULE) */}
+      {/* Typing Indicator */}
       {peerIsTyping && (
         <div style={{ padding: '0 20px 8px 20px' }}>
           <div className="badge-green-typing">
             <span className="typing-dot" />
             <span className="typing-dot" />
             <span className="typing-dot" />
-            <span style={{ marginLeft: '4px' }}>typing...</span>
+            <span style={{ marginLeft: '4px' }}>someone is writing...</span>
           </div>
         </div>
       )}
 
-      {/* Bottom Input Control Bar */}
+      {/* Footer Input Bar */}
       <footer style={{
         padding: '12px 16px',
         backgroundColor: '#101014',
         borderTop: '1px solid var(--card-border)'
       }}>
         
-        {/* Timer selection row */}
+        {/* Timer Selector */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
           <span style={{ fontSize: '11px', color: '#8e8e98' }}>Auto-delete timer:</span>
           <div style={{ display: 'flex', gap: '6px' }}>
@@ -218,9 +301,9 @@ export function ChatRoom({
           </div>
         </div>
 
+        {/* Input & Action Form */}
         <form onSubmit={handleSend} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           
-          {/* Hidden File Input for View-Once Images */}
           <input
             type="file"
             ref={fileInputRef}
@@ -229,7 +312,7 @@ export function ChatRoom({
             style={{ display: 'none' }}
           />
 
-          {/* Image Upload Button */}
+          {/* View-Once Image Button */}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
@@ -267,17 +350,18 @@ export function ChatRoom({
             <Phone size={20} />
           </button>
 
-          {/* Main Text Box (Green Glow on Typing) */}
+          {/* Text Input Box */}
           <input
             type="text"
             className="input-typing"
-            placeholder="Type encrypted message..."
+            placeholder="Type encrypted message (press Enter)..."
             value={inputText}
             onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
             style={{ flex: 1 }}
           />
 
-          {/* Send Button */}
+          {/* Prominent Send Button */}
           <button
             type="submit"
             style={{
@@ -289,7 +373,8 @@ export function ChatRoom({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              opacity: inputText.trim() ? 1 : 0.5
+              opacity: inputText.trim() ? 1 : 0.4,
+              cursor: inputText.trim() ? 'pointer' : 'default'
             }}
             disabled={!inputText.trim()}
           >

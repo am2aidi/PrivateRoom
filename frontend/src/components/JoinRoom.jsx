@@ -1,9 +1,13 @@
 import React, { useState } from 'react';
-import { Lock, Eye, EyeOff, ShieldAlert, ArrowRight } from 'lucide-react';
+import { Lock, Eye, EyeOff, ShieldAlert, ArrowRight, User } from 'lucide-react';
+
+const AVATARS = ['🥷', '👤', '🦊', '🐺', '🦉', '🦅', '⚡', '🛡️'];
 
 export function JoinRoom({ onJoin, errorMsg }) {
   const [roomName, setRoomName] = useState('');
   const [password, setPassword] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [selectedAvatar, setSelectedAvatar] = useState('🥷');
   const [showPassword, setShowPassword] = useState(false);
   const [localError, setLocalError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -21,21 +25,21 @@ export function JoinRoom({ onJoin, errorMsg }) {
       return;
     }
     if (password.length < 4) {
-      setLocalError('Password must be at least 4 characters long.');
+      setLocalError('Password must be at least 4 characters.');
       return;
     }
 
+    const finalNickname = nickname.trim() || `User-${Math.floor(100 + Math.random() * 900)}`;
+
     setIsSubmitting(true);
     try {
-      await onJoin(roomName.trim(), password.trim());
+      await onJoin(roomName.trim(), password.trim(), finalNickname, selectedAvatar);
     } catch (err) {
       setLocalError(err.message || 'Failed to generate encryption key.');
     } finally {
       setIsSubmitting(false);
     }
   };
-
-  const isPasswordWeak = password.length > 0 && password.length < 6;
 
   return (
     <div style={{
@@ -47,10 +51,10 @@ export function JoinRoom({ onJoin, errorMsg }) {
       padding: '20px',
       backgroundColor: '#08080a'
     }}>
-      <div style={{ maxWidth: '420px', width: '100%' }}>
+      <div style={{ maxWidth: '440px', width: '100%' }}>
         
-        {/* Header Branding */}
-        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+        {/* Header */}
+        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
           <div style={{
             width: '56px',
             height: '56px',
@@ -60,25 +64,74 @@ export function JoinRoom({ onJoin, errorMsg }) {
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            marginBottom: '16px'
+            marginBottom: '12px'
           }}>
             <Lock size={26} color="#ffffff" />
           </div>
           <h1 style={{ fontSize: '24px', fontWeight: '600', color: '#ffffff', letterSpacing: '-0.5px' }}>
             Private Room
           </h1>
-          <p style={{ color: '#8e8e98', fontSize: '14px', marginTop: '6px' }}>
-            Zero records. End-to-end encrypted chat.
+          <p style={{ color: '#8e8e98', fontSize: '13px', marginTop: '4px' }}>
+            Zero records • End-to-end encrypted • Up to 10 users
           </p>
         </div>
 
-        {/* Join Form Card */}
+        {/* Join Card */}
         <div className="card-box">
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             
-            {/* Room Name Input */}
+            {/* Avatar Selection */}
             <div>
               <label style={{ display: 'block', fontSize: '13px', color: '#8e8e98', marginBottom: '8px' }}>
+                Choose Profile Avatar
+              </label>
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between' }}>
+                {AVATARS.map((avatar) => {
+                  const isSelected = selectedAvatar === avatar;
+                  return (
+                    <button
+                      key={avatar}
+                      type="button"
+                      onClick={() => setSelectedAvatar(avatar)}
+                      style={{
+                        width: '40px',
+                        height: '40px',
+                        borderRadius: '10px',
+                        fontSize: '20px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: isSelected ? 'rgba(255, 255, 255, 0.2)' : 'rgba(255, 255, 255, 0.04)',
+                        border: isSelected ? '1px solid #ffffff' : '1px solid var(--card-border)',
+                        transform: isSelected ? 'scale(1.1)' : 'scale(1)',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      {avatar}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Display Name Input */}
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', color: '#8e8e98', marginBottom: '6px' }}>
+                Display Nickname (Optional)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Alex"
+                value={nickname}
+                onChange={(e) => setNickname(e.target.value)}
+                style={{ width: '100%' }}
+                maxLength={16}
+              />
+            </div>
+
+            {/* Room Name Input */}
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', color: '#8e8e98', marginBottom: '6px' }}>
                 Room Name
               </label>
               <input
@@ -88,14 +141,12 @@ export function JoinRoom({ onJoin, errorMsg }) {
                 onChange={(e) => setRoomName(e.target.value)}
                 style={{ width: '100%' }}
                 autoComplete="off"
-                autoCorrect="off"
-                spellCheck="false"
               />
             </div>
 
-            {/* Password Input with Eye Toggle */}
+            {/* Password Input */}
             <div>
-              <label style={{ display: 'block', fontSize: '13px', color: '#8e8e98', marginBottom: '8px' }}>
+              <label style={{ display: 'block', fontSize: '13px', color: '#8e8e98', marginBottom: '6px' }}>
                 Room Password
               </label>
               <div style={{ position: 'relative' }}>
@@ -105,7 +156,6 @@ export function JoinRoom({ onJoin, errorMsg }) {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   style={{ width: '100%', paddingRight: '48px' }}
-                  autoComplete="off"
                 />
                 <button
                   type="button"
@@ -122,13 +172,6 @@ export function JoinRoom({ onJoin, errorMsg }) {
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
-              
-              {/* Weak Password Hint */}
-              {isPasswordWeak && (
-                <p style={{ color: '#ffb74d', fontSize: '12px', marginTop: '6px' }}>
-                  Tip: Use longer passwords for stronger end-to-end key security.
-                </p>
-              )}
             </div>
 
             {/* Error Banners */}
@@ -139,12 +182,12 @@ export function JoinRoom({ onJoin, errorMsg }) {
               </div>
             )}
 
-            {/* Join Action Button */}
+            {/* Submit */}
             <button
               type="submit"
               className="btn-primary"
               disabled={isSubmitting}
-              style={{ marginTop: '8px', opacity: isSubmitting ? 0.7 : 1 }}
+              style={{ marginTop: '6px', opacity: isSubmitting ? 0.7 : 1 }}
             >
               {isSubmitting ? 'Deriving Encryption Keys...' : 'Join Room'}
               {!isSubmitting && <ArrowRight size={18} />}
@@ -152,12 +195,11 @@ export function JoinRoom({ onJoin, errorMsg }) {
           </form>
         </div>
 
-        {/* Security Assurance Disclaimer */}
         <p style={{
           textAlign: 'center',
           color: '#8e8e98',
           fontSize: '13px',
-          marginTop: '24px',
+          marginTop: '20px',
           lineHeight: '1.5'
         }}>
           Nothing is saved. Everything disappears when you leave.

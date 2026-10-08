@@ -17,13 +17,16 @@ export function App() {
   const [errorMsg, setErrorMsg] = useState('');
   const [closedReason, setClosedReason] = useState('');
 
-  // E2EE & Session Credentials
+  // E2EE Credentials & Profile State
   const [roomId, setRoomId] = useState('');
   const [secretKey, setSecretKey] = useState(null);
   const [safetyCode, setSafetyCode] = useState('');
   const [clientId] = useState(() => Math.random().toString(36).substring(2, 10));
+  const [userNickname, setUserNickname] = useState('Anonymous');
+  const [userAvatar, setUserAvatar] = useState('🥷');
 
-  // Chat & Presence State
+  // Room State
+  const [roomMembers, setRoomMembers] = useState([]);
   const [messages, setMessages] = useState([]);
   const [peerIsTyping, setPeerIsTyping] = useState(false);
   const [connectionState, setConnectionState] = useState('disconnected');
@@ -32,14 +35,13 @@ export function App() {
   const [isCallActive, setIsCallActive] = useState(false);
   const [isIncomingCall, setIsIncomingCall] = useState(false);
   const [incomingOffer, setIncomingOffer] = useState(null);
+  const [incomingCallerName, setIncomingCallerName] = useState('Peer');
   const [isMuted, setIsMuted] = useState(false);
 
-  // References to keep persistent state across renders
   const wsRef = useRef(null);
   const webRTCRef = useRef(null);
   const voiceChangerRef = useRef(null);
 
-  // Determine WebSocket Backend URL dynamically
   const getWsUrl = () => {
     if (import.meta.env.VITE_WS_URL) {
       return import.meta.env.VITE_WS_URL;
@@ -49,27 +51,25 @@ export function App() {
     return `${protocol}//${host}:8080`;
   };
 
-  // Initialize screenshot deterrents when in Chat room
+  // Screenshot guard on global focus
   useEffect(() => {
     if (view === 'CHAT') {
       const cleanup = setupScreenshotProtection(
+        () => {},
         () => {
-          // Tab blurred / focus lost
-        },
-        () => {
-          // PrintScreen key pressed
+          handleScreenshotAlert('global', 'PrintScreen key pressed');
         }
       );
       return cleanup;
     }
   }, [view]);
 
-  // Handle Page Visibility change -> Mark delivered messages as "Seen"
+  // Visibility change handling
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible' && wsRef.current && secretKey) {
         messages.forEach((msg) => {
-          if (!msg.isOwn && !msg.seen) {
+          if (!msg.isOwn && !msg.seen && msg.type !== 'system') {
             sendWsMessage({
               type: 'message-status',
               msgId: msg.id,
@@ -87,7 +87,6 @@ export function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [messages, secretKey]);
 
-  // Helper to dispatch WebSocket payload
   const sendWsMessage = (payload) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(payload));
@@ -95,16 +94,17 @@ export function App() {
   };
 
   // 1. Join Room Action
-  const handleJoin = async (roomName, password) => {
+  const handleJoin = async (roomName, password, nickname, avatar) => {
     setErrorMsg('');
+    setUserNickname(nickname);
+    setUserAvatar(avatar);
+
     try {
-      // Derive E2EE keys
       const creds = await deriveRoomCredentials(roomName, password);
       setRoomId(creds.roomId);
       setSecretKey(creds.secretKey);
       setSafetyCode(creds.safetyCode);
 
-      // Connect to WebSocket server
       const wsUrl = getWsUrl();
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -114,7 +114,9 @@ export function App() {
         ws.send(JSON.stringify({
           type: 'join-room',
           roomId: creds.roomId,
-          clientId
+          clientId,
+          nickname,
+          avatar
         }));
       };
 
@@ -123,19 +125,19 @@ export function App() {
           const data = JSON.parse(event.data);
           handleServerMessage(data, creds.secretKey);
         } catch (err) {
-          console.error('Error handling WebSocket message:', err);
+          console.error('Error handling server message:', err);
         }
       };
 
       ws.onerror = () => {
-        setErrorMsg('Failed to connect to signal server. Ensure server is running.');
+        setErrorMsg('Failed to connect to signal server.');
         setView('JOIN');
       };
 
       ws.onclose = () => {
         setConnectionState('disconnected');
         if (view !== 'CLOSED' && view !== 'JOIN') {
-          handleRoomClosed('Server connection closed or lost.');
+          handleRoomClosed('Server connection closed.');
         }
       };
 
@@ -144,24 +146,52 @@ export function App() {
     }
   };
 
-  // 2. Handle incoming server messages
+  // 2. Process incoming server messages
   const handleServerMessage = async (data, currentKey) => {
     switch (data.type) {
       case 'joined':
         if (data.peerCount === 1) {
           setView('WAITING');
-        } else if (data.peerCount === 2) {
+        } else {
           setView('CHAT');
         }
         break;
 
-      case 'peer-connected':
+      case 'peer-joined':
         setView('CHAT');
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Math.random().toString(),
+            type: 'system',
+            text: `${data.avatar || '👤'} ${data.nickname || 'A user'} joined the room.`,
+            isWarning: false
+          }
+        ]);
+        break;
+
+      case 'peer-left':
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Math.random().toString(),
+            type: 'system',
+            text: `${data.avatar || '👤'} ${data.nickname || 'A user'} left the room.`,
+            isWarning: false
+          }
+        ]);
+        break;
+
+      case 'room-members-update':
+        setRoomMembers(data.members || []);
+        if (data.peerCount > 1 && view === 'WAITING') {
+          setView('CHAT');
+        }
         break;
 
       case 'error':
         if (data.code === 'ROOM_FULL') {
-          setErrorMsg('Room is full (maximum 2 people allowed).');
+          setErrorMsg('Room is full (maximum 10 people allowed).');
           cleanUpSession();
           setView('JOIN');
         } else {
@@ -183,6 +213,9 @@ export function App() {
             text: decryptedText,
             type: 'text',
             isOwn: false,
+            senderId: data.senderId,
+            senderName: data.senderName,
+            senderAvatar: data.senderAvatar,
             status: isVisible ? 'seen' : 'delivered',
             seen: isVisible,
             deleteTimer: data.deleteTimer || 10,
@@ -191,14 +224,13 @@ export function App() {
 
           setMessages((prev) => [...prev, newMsg]);
 
-          // Send delivered/seen signal back to sender
           sendWsMessage({
             type: 'message-status',
             msgId: data.msgId,
             status: isVisible ? 'seen' : 'delivered'
           });
         } catch (e) {
-          console.error('Failed to decrypt incoming message:', e);
+          console.error('Failed to decrypt message:', e);
         }
         break;
 
@@ -209,6 +241,9 @@ export function App() {
             id: data.imageId,
             type: 'image',
             isOwn: false,
+            senderId: data.senderId,
+            senderName: data.senderName,
+            senderAvatar: data.senderAvatar,
             encryptedData: data.encrypted,
             status: 'unread',
             timestamp: Date.now()
@@ -219,6 +254,18 @@ export function App() {
           msgId: data.imageId,
           status: 'delivered'
         });
+        break;
+
+      case 'screenshot-alert-broadcast':
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Math.random().toString(),
+            type: 'system',
+            text: `⚠️ Warning: ${data.senderAvatar || '👤'} ${data.senderName || 'Someone'} attempted a screenshot!`,
+            isWarning: true
+          }
+        ]);
         break;
 
       case 'message-status':
@@ -248,6 +295,7 @@ export function App() {
         if (data.signalType === 'offer') {
           setIsIncomingCall(true);
           setIncomingOffer(data.sdp);
+          setIncomingCallerName(data.senderName || 'Peer');
         } else if (webRTCRef.current) {
           webRTCRef.current.handleSignal(data);
         }
@@ -264,6 +312,8 @@ export function App() {
       text: plainText,
       type: 'text',
       isOwn: true,
+      senderAvatar: userAvatar,
+      senderName: userNickname,
       status: 'sent',
       seen: false,
       deleteTimer,
@@ -288,6 +338,8 @@ export function App() {
       id: imageId,
       type: 'image',
       isOwn: true,
+      senderAvatar: userAvatar,
+      senderName: userNickname,
       encryptedData: encryptedBufferObj,
       status: 'sent',
       timestamp: Date.now()
@@ -302,7 +354,26 @@ export function App() {
     });
   };
 
-  // 5. Handle Typing Status
+  // 5. Handle Screenshot Alert Broadcast
+  const handleScreenshotAlert = (imageId, reason) => {
+    sendWsMessage({
+      type: 'screenshot-alert-broadcast',
+      imageId,
+      reason
+    });
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Math.random().toString(),
+        type: 'system',
+        text: `⚠️ Warning: You attempted a screenshot!`,
+        isWarning: true
+      }
+    ]);
+  };
+
+  // 6. Handle Typing Status
   const handleTypingStatus = (isTyping) => {
     sendWsMessage({
       type: 'typing-indicator',
@@ -310,7 +381,7 @@ export function App() {
     });
   };
 
-  // 6. Handle Image Opened Signal
+  // 7. Handle Image Opened Signal
   const handleOpenedImage = (imageId) => {
     sendWsMessage({
       type: 'image-opened-signal',
@@ -321,7 +392,6 @@ export function App() {
     );
   };
 
-  // 7. Handle Expired Message Removal
   const handleMessageExpired = (msgId) => {
     setMessages((prev) => prev.filter((m) => m.id !== msgId));
   };
@@ -390,7 +460,6 @@ export function App() {
     setIncomingOffer(null);
   };
 
-  // 9. Leave Room & Session Cleanup
   const handleLeaveRoom = () => {
     sendWsMessage({ type: 'leave-room' });
     handleRoomClosed('You left the room.');
@@ -413,6 +482,7 @@ export function App() {
     setSecretKey(null);
     setSafetyCode('');
     setMessages([]);
+    setRoomMembers([]);
   };
 
   const handleGoHome = () => {
@@ -437,13 +507,17 @@ export function App() {
           secretKey={secretKey}
           safetyCode={safetyCode}
           messages={messages}
+          roomMembers={roomMembers}
           peerIsTyping={peerIsTyping}
+          userAvatar={userAvatar}
+          userNickname={userNickname}
           onSendMessage={handleSendMessage}
           onSendImage={handleSendImage}
           onTypingStatus={handleTypingStatus}
           onStartCall={handleStartCall}
           onLeaveRoom={handleLeaveRoom}
           onOpenedImage={handleOpenedImage}
+          onScreenshotAlert={handleScreenshotAlert}
           onMessageExpired={handleMessageExpired}
           connectionState={connectionState}
         />

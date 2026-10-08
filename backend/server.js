@@ -2,26 +2,26 @@
  * Private Room Backend Server
  * Zero-record, memory-only WebSocket relay server.
  * 
- * Rules:
- * 1. NO database. Everything is kept strictly in RAM.
- * 2. NO server logs of IP addresses, messages, or keys.
- * 3. Max 2 users per room ID. 3rd user is rejected.
- * 4. Room deleted immediately when participants leave or idle timeout triggers.
+ * Upgraded Features:
+ * - Supports up to 10 people per room ID.
+ * - Broadcasts peer join/leave events & avatar participant list.
+ * - Targeted WebRTC signaling for multi-user voice calls.
+ * - Zero storage: No database, no logs, no disk persistence.
  */
 
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = process.env.PORT || 8080;
+const MAX_ROOM_CLIENTS = 10;
 
 // Memory storage for active rooms (RAM only)
-// Key: roomId (scrambled hash sent by client)
-// Value: { clients: Set<WebSocket>, createdAt: number, lastActive: number }
+// Key: roomId
+// Value: { clients: Map(ws -> clientInfo), createdAt, lastActive }
 const activeRooms = new Map();
 
-// HTTP server for health checks & deployment keep-alive
+// HTTP server for health check & keep-alive
 const server = http.createServer((req, res) => {
-  // Strict security and no-cache headers
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
@@ -45,40 +45,65 @@ wss.on('error', (err) => {
   }
 });
 
-
-// Track client room association
-// WebSocket instance -> { roomId, clientId, joinTime, lastMsgTime }
 const clientState = new Map();
 
-/**
- * Remove client from their room and clean up RAM if room becomes empty
- */
+function broadcastRoomMembers(room) {
+  const membersList = [];
+  for (const [ws, info] of room.clients.entries()) {
+    membersList.push({
+      clientId: info.clientId,
+      avatar: info.avatar,
+      nickname: info.nickname
+    });
+  }
+
+  const payload = JSON.stringify({
+    type: 'room-members-update',
+    members: membersList,
+    peerCount: membersList.length
+  });
+
+  for (const [ws] of room.clients.entries()) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(payload);
+    }
+  }
+}
+
 function leaveCurrentRoom(ws, reason = 'left') {
   const state = clientState.get(ws);
   if (!state) return;
 
-  const { roomId, clientId } = state;
+  const { roomId, clientId, nickname, avatar } = state;
   clientState.delete(ws);
 
   const room = activeRooms.get(roomId);
   if (!room) return;
 
-  // Remove ws from room client set
+  // Remove client from room
   room.clients.delete(ws);
 
-  // Notify remaining peer that room is closed and wiped
-  for (const peerWs of room.clients) {
+  // Notify remaining members
+  const leavePayload = JSON.stringify({
+    type: 'peer-left',
+    clientId,
+    nickname,
+    avatar,
+    reason,
+    message: `${nickname || 'A user'} left the room.`
+  });
+
+  for (const [peerWs] of room.clients.entries()) {
     if (peerWs.readyState === WebSocket.OPEN) {
-      peerWs.send(JSON.stringify({
-        type: 'room-closed',
-        reason: reason,
-        message: 'The other person left the room. All temporary session data has been erased.'
-      }));
+      peerWs.send(leavePayload);
     }
   }
 
-  // If room is now empty or destroyed, erase from RAM completely
-  if (room.clients.size === 0) {
+  // Update room members list
+  if (room.clients.size > 0) {
+    broadcastRoomMembers(room);
+  } else {
+    // Erase room from RAM completely when empty
     activeRooms.delete(roomId);
   }
 }
@@ -95,20 +120,18 @@ wss.on('connection', (ws) => {
       const data = JSON.parse(rawMessage.toString());
       const { type } = data;
 
-      // Rate limit / payload size sanity check (max 2MB for view-once fallback payloads)
-      if (rawMessage.length > 2 * 1024 * 1024) {
+      if (rawMessage.length > 5 * 1024 * 1024) {
         ws.send(JSON.stringify({ type: 'error', message: 'Payload too large.' }));
         return;
       }
 
       if (type === 'join-room') {
-        const { roomId, clientId } = data;
+        const { roomId, clientId, nickname, avatar } = data;
         if (!roomId || typeof roomId !== 'string' || roomId.length < 8) {
           ws.send(JSON.stringify({ type: 'error', message: 'Invalid Room ID.' }));
           return;
         }
 
-        // Leave any existing room first
         if (clientState.has(ws)) {
           leaveCurrentRoom(ws, 'switched-room');
         }
@@ -116,76 +139,74 @@ wss.on('connection', (ws) => {
         let room = activeRooms.get(roomId);
 
         if (!room) {
-          // Create new room in RAM
           room = {
             roomId,
-            clients: new Set(),
+            clients: new Map(),
             createdAt: Date.now(),
             lastActive: Date.now()
           };
           activeRooms.set(roomId, room);
         }
 
-        // Enforce MAX 2 users rule
-        if (room.clients.size >= 2) {
+        // Max 10 users limit check
+        if (room.clients.size >= MAX_ROOM_CLIENTS) {
           ws.send(JSON.stringify({
             type: 'error',
             code: 'ROOM_FULL',
-            message: 'Room is full (maximum 2 people allowed).'
+            message: `Room is full (maximum ${MAX_ROOM_CLIENTS} people allowed).`
           }));
           return;
         }
 
-        // Register client in room
-        room.clients.add(ws);
+        const clientInfo = {
+          clientId: clientId || Math.random().toString(36).substring(2, 10),
+          nickname: nickname || 'Anonymous',
+          avatar: avatar || '🥷',
+          joinTime: Date.now()
+        };
+
+        room.clients.set(ws, clientInfo);
         room.lastActive = Date.now();
 
         clientState.set(ws, {
           roomId,
-          clientId: clientId || Math.random().toString(36).substring(2, 10),
-          joinTime: Date.now()
+          ...clientInfo
         });
 
-        // Respond to joined client
-        if (room.clients.size === 1) {
-          ws.send(JSON.stringify({
-            type: 'joined',
-            role: 'initiator',
-            peerCount: 1,
-            message: 'Waiting for the second person to join...'
-          }));
-        } else if (room.clients.size === 2) {
-          // Notify BOTH clients that peer is ready
-          const clientsArray = Array.from(room.clients);
-          clientsArray[0].send(JSON.stringify({
-            type: 'joined',
-            role: 'initiator',
-            peerCount: 2,
-            message: 'Second person joined! E2E Encryption established.'
-          }));
-          clientsArray[1].send(JSON.stringify({
-            type: 'joined',
-            role: 'joiner',
-            peerCount: 2,
-            message: 'Joined room! E2E Encryption established.'
-          }));
+        // Send joined confirmation to new user
+        ws.send(JSON.stringify({
+          type: 'joined',
+          clientId: clientInfo.clientId,
+          peerCount: room.clients.size,
+          maxClients: MAX_ROOM_CLIENTS,
+          message: `Joined room! (${room.clients.size}/${MAX_ROOM_CLIENTS} users)`
+        }));
 
-          // Send peer-connected signal to initiate WebRTC / Safety verification
-          for (const clientWs of room.clients) {
-            clientWs.send(JSON.stringify({ type: 'peer-connected' }));
+        // Broadcast peer-joined notice to existing members
+        for (const [peerWs, info] of room.clients.entries()) {
+          if (peerWs !== ws && peerWs.readyState === WebSocket.OPEN) {
+            peerWs.send(JSON.stringify({
+              type: 'peer-joined',
+              clientId: clientInfo.clientId,
+              nickname: clientInfo.nickname,
+              avatar: clientInfo.avatar,
+              message: `${clientInfo.nickname} joined the room.`
+            }));
           }
         }
+
+        // Send updated member list to everyone
+        broadcastRoomMembers(room);
         return;
       }
 
-      // Handle leaving room explicitly
       if (type === 'leave-room') {
         leaveCurrentRoom(ws, 'user-left');
         ws.send(JSON.stringify({ type: 'left-success' }));
         return;
       }
 
-      // For all relay messages (chat, status, signals, voice call), forward ONLY to room peer
+      // Relay all other messages (chat, status, image, screenshot alert, voice call signals)
       const state = clientState.get(ws);
       if (!state) {
         ws.send(JSON.stringify({ type: 'error', message: 'Not connected to any room.' }));
@@ -200,31 +221,38 @@ wss.on('connection', (ws) => {
 
       room.lastActive = Date.now();
 
-      // Forward message directly to peer socket in the same room
-      let forwarded = 0;
-      for (const peerWs of room.clients) {
+      // If targeted to a specific client (WebRTC offer/answer)
+      if (data.targetId) {
+        for (const [peerWs, info] of room.clients.entries()) {
+          if (info.clientId === data.targetId && peerWs.readyState === WebSocket.OPEN) {
+            peerWs.send(JSON.stringify({
+              ...data,
+              senderId: state.clientId,
+              senderName: state.nickname,
+              senderAvatar: state.avatar,
+              relayedAt: Date.now()
+            }));
+            break;
+          }
+        }
+        return;
+      }
+
+      // Broadcast relay to all peers in room
+      for (const [peerWs] of room.clients.entries()) {
         if (peerWs !== ws && peerWs.readyState === WebSocket.OPEN) {
           peerWs.send(JSON.stringify({
             ...data,
             senderId: state.clientId,
+            senderName: state.nickname,
+            senderAvatar: state.avatar,
             relayedAt: Date.now()
           }));
-          forwarded++;
         }
       }
 
-      if (forwarded === 0 && type === 'chat-message') {
-        // If peer is not online, notify sender that message could not be delivered
-        ws.send(JSON.stringify({
-          type: 'delivery-failed',
-          msgId: data.msgId,
-          message: 'Peer is offline. Messages are not saved on the server.'
-        }));
-      }
-
     } catch (err) {
-      // Internal parse error - silent response, no error detail leakage
-      ws.send(JSON.stringify({ type: 'error', message: 'Malformed message request.' }));
+      ws.send(JSON.stringify({ type: 'error', message: 'Malformed request.' }));
     }
   });
 
@@ -237,7 +265,6 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Heartbeat ping interval to drop broken socket connections (every 25 seconds)
 const pingInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) {
@@ -249,14 +276,11 @@ const pingInterval = setInterval(() => {
   });
 }, 25000);
 
-// Idle room garbage collection interval (every 1 minute)
-// Cleans up rooms with 0 clients or rooms idle for > 10 minutes
 const gcInterval = setInterval(() => {
   const now = Date.now();
   for (const [roomId, room] of activeRooms.entries()) {
-    if (room.clients.size === 0 || (now - room.lastActive > 10 * 60 * 1000)) {
-      // Force close any lingering connections in idle room
-      for (const ws of room.clients) {
+    if (room.clients.size === 0 || (now - room.lastActive > 15 * 60 * 1000)) {
+      for (const [ws] of room.clients.entries()) {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'room-closed', reason: 'idle-timeout' }));
           ws.close();
@@ -286,4 +310,3 @@ function startServer(port) {
 }
 
 startServer(PORT);
-

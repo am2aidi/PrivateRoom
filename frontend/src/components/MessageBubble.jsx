@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Check, CheckCheck, Eye } from 'lucide-react';
+import { Check, CheckCheck } from 'lucide-react';
 import { ViewOnceImage } from './ViewOnceImage';
 
 export function MessageBubble({
@@ -8,15 +8,15 @@ export function MessageBubble({
   secretKey,
   roomId,
   onOpenedImage,
+  onScreenshotAlert,
   onMessageExpired
 }) {
   const [timeLeft, setTimeLeft] = useState(msg.deleteTimer || 10);
   const [progressPercent, setProgressPercent] = useState(100);
 
-  // Auto-delete timer starts when message is Seen or for received message
   useEffect(() => {
-    if (msg.type === 'image') return; // Images handled by view-once
-    if (!msg.seen) return; // Wait until seen status
+    if (msg.type === 'image') return;
+    if (!msg.seen) return;
 
     const totalSeconds = msg.deleteTimer || 10;
     const startTime = Date.now();
@@ -26,7 +26,7 @@ export function MessageBubble({
       const now = Date.now();
       const remainingMs = Math.max(0, endTime - now);
       const remainingSec = Math.ceil(remainingMs / 1000);
-      
+
       setTimeLeft(remainingSec);
       setProgressPercent((remainingMs / (totalSeconds * 1000)) * 100);
 
@@ -44,13 +44,29 @@ export function MessageBubble({
   return (
     <div className={`msg-container ${isOwn ? 'msg-sent' : 'msg-received'}`}>
       
-      {/* View-Once Image or Encrypted Text */}
+      {/* Sender Avatar & Name Header (for Received Messages in Multi-User Chat) */}
+      {!isOwn && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          marginBottom: '4px',
+          fontSize: '12px',
+          color: '#8e8e98'
+        }}>
+          <span style={{ fontSize: '15px' }}>{msg.senderAvatar || '👤'}</span>
+          <span style={{ fontWeight: '500', color: '#e0e0e0' }}>{msg.senderName || 'Peer'}</span>
+        </div>
+      )}
+
+      {/* Message Content: Image or Text */}
       {msg.type === 'image' ? (
         <ViewOnceImage
           imagePayload={msg}
           secretKey={secretKey}
           roomId={roomId}
           onOpenedSignal={onOpenedImage}
+          onScreenshotAlert={onScreenshotAlert}
         />
       ) : (
         <div className="msg-bubble">
@@ -71,7 +87,7 @@ export function MessageBubble({
         </div>
       )}
 
-      {/* Message Status Bar (Sent, Delivered, Seen in Blue) for Own Messages */}
+      {/* Status marks for own messages */}
       {isOwn && (
         <div style={{
           display: 'flex',
