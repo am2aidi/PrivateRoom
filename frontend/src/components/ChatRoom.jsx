@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Shield, Image as ImageIcon, Phone, Send, LogOut, Users, AlertTriangle } from 'lucide-react';
+import { Shield, Image as ImageIcon, Camera, Phone, Send, LogOut, Users, AlertTriangle } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
+import { CameraCaptureModal } from './CameraCaptureModal';
 import { encryptText, encryptBuffer } from '../crypto/webcrypto';
 import { stripExifData } from '../utils/screenshotGuard';
 
@@ -25,6 +26,7 @@ export function ChatRoom({
   const [inputText, setInputText] = useState('');
   const [deleteTimerSeconds, setDeleteTimerSeconds] = useState(10);
   const [showMembersList, setShowMembersList] = useState(false);
+  const [showCameraModal, setShowCameraModal] = useState(false);
 
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -71,8 +73,8 @@ export function ChatRoom({
     }
   };
 
-  // Handle View-Once Image Select
-  const handleImageSelect = async (e) => {
+  // Option 1: File / Gallery Upload
+  const handleImageFileSelect = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -81,9 +83,19 @@ export function ChatRoom({
       const encrypted = await encryptBuffer(cleanArrayBuffer, secretKey);
       onSendImage(encrypted);
     } catch (err) {
-      console.error('Failed to process image:', err);
+      console.error('Failed to process file image:', err);
     } finally {
       e.target.value = '';
+    }
+  };
+
+  // Option 2: Direct Camera Photo Snap
+  const handleCameraCapture = async (cleanArrayBuffer) => {
+    try {
+      const encrypted = await encryptBuffer(cleanArrayBuffer, secretKey);
+      onSendImage(encrypted);
+    } catch (err) {
+      console.error('Failed to encrypt camera photo:', err);
     }
   };
 
@@ -107,7 +119,7 @@ export function ChatRoom({
         zIndex: 10
       }}>
         
-        {/* Safety Code Mnemonic & Member Count */}
+        {/* Safety Code & Member Count */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div style={{
             padding: '6px 10px',
@@ -124,7 +136,6 @@ export function ChatRoom({
             </span>
           </div>
 
-          {/* Members Toggle Button */}
           <button
             type="button"
             onClick={() => setShowMembersList(!showMembersList)}
@@ -164,7 +175,7 @@ export function ChatRoom({
 
       </header>
 
-      {/* Members Drawer Overlay (Up to 10 users) */}
+      {/* Members Drawer Overlay */}
       {showMembersList && (
         <div style={{
           backgroundColor: '#14141a',
@@ -302,22 +313,22 @@ export function ChatRoom({
         </div>
 
         {/* Input & Action Form */}
-        <form onSubmit={handleSend} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <form onSubmit={handleSend} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           
           <input
             type="file"
             ref={fileInputRef}
-            onChange={handleImageSelect}
+            onChange={handleImageFileSelect}
             accept="image/*"
             style={{ display: 'none' }}
           />
 
-          {/* View-Once Image Button */}
+          {/* Option 1: File / Gallery Upload */}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
             style={{
-              padding: '12px',
+              padding: '10px',
               borderRadius: '12px',
               backgroundColor: 'rgba(255, 255, 255, 0.06)',
               color: '#ffffff',
@@ -326,9 +337,28 @@ export function ChatRoom({
               alignItems: 'center',
               justifyContent: 'center'
             }}
-            title="Send View-Once Image"
+            title="Upload Photo File / Gallery"
           >
-            <ImageIcon size={20} />
+            <ImageIcon size={19} />
+          </button>
+
+          {/* Option 2: Direct Camera Snap */}
+          <button
+            type="button"
+            onClick={() => setShowCameraModal(true)}
+            style={{
+              padding: '10px',
+              borderRadius: '12px',
+              backgroundColor: 'rgba(255, 255, 255, 0.06)',
+              color: '#ffffff',
+              border: '1px solid var(--card-border)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title="Take Direct Camera Photo"
+          >
+            <Camera size={19} />
           </button>
 
           {/* Voice Call Button */}
@@ -336,7 +366,7 @@ export function ChatRoom({
             type="button"
             onClick={onStartCall}
             style={{
-              padding: '12px',
+              padding: '10px',
               borderRadius: '12px',
               backgroundColor: 'rgba(255, 255, 255, 0.06)',
               color: '#ffffff',
@@ -347,25 +377,25 @@ export function ChatRoom({
             }}
             title="Start Encrypted Voice Call"
           >
-            <Phone size={20} />
+            <Phone size={19} />
           </button>
 
           {/* Text Input Box */}
           <input
             type="text"
             className="input-typing"
-            placeholder="Type encrypted message (press Enter)..."
+            placeholder="Type message..."
             value={inputText}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            style={{ flex: 1 }}
+            style={{ flex: 1, minWidth: 0 }}
           />
 
-          {/* Prominent Send Button */}
+          {/* Send Button */}
           <button
             type="submit"
             style={{
-              padding: '12px 18px',
+              padding: '10px 16px',
               borderRadius: '12px',
               backgroundColor: '#ffffff',
               color: '#000000',
@@ -383,6 +413,14 @@ export function ChatRoom({
 
         </form>
       </footer>
+
+      {/* Live Camera Photo Capture Modal */}
+      {showCameraModal && (
+        <CameraCaptureModal
+          onCapture={handleCameraCapture}
+          onClose={() => setShowCameraModal(false)}
+        />
+      )}
 
     </div>
   );
