@@ -492,7 +492,7 @@ export function App() {
   };
 
   return (
-    <>
+    <div className="app-viewport">
       {view === 'JOIN' && (
         <JoinRoom onJoin={handleJoin} errorMsg={errorMsg} />
       )}
@@ -537,8 +537,9 @@ export function App() {
       {view === 'CLOSED' && (
         <RoomClosed onGoHome={handleGoHome} reason={closedReason} />
       )}
-    </>
+    </div>
   );
+
 }
 
 export default App;
