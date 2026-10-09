@@ -2,11 +2,11 @@
  * Private Room Backend Server
  * Zero-record, memory-only WebSocket relay server.
  * 
- * Upgraded Features:
- * - Supports up to 10 people per room ID.
- * - Broadcasts peer join/leave events & avatar participant list.
- * - Targeted WebRTC signaling for multi-user voice calls.
- * - Zero storage: No database, no logs, no disk persistence.
+ * Room Lifecycle Rule:
+ * - Room supports up to 10 members.
+ * - While 2+ members are present, room stays OPEN when people join/leave.
+ * - When member count drops to 1 (only 1 person remains), notify the last person
+ *   that the room is closed and wipe all room memory completely from RAM!
  */
 
 const http = require('http');
@@ -16,11 +16,8 @@ const PORT = process.env.PORT || 8080;
 const MAX_ROOM_CLIENTS = 10;
 
 // Memory storage for active rooms (RAM only)
-// Key: roomId
-// Value: { clients: Map(ws -> clientInfo), createdAt, lastActive }
 const activeRooms = new Map();
 
-// HTTP server for health check & keep-alive
 const server = http.createServer((req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -83,27 +80,42 @@ function leaveCurrentRoom(ws, reason = 'left') {
   // Remove client from room
   room.clients.delete(ws);
 
-  // Notify remaining members
-  const leavePayload = JSON.stringify({
-    type: 'peer-left',
-    clientId,
-    nickname,
-    avatar,
-    reason,
-    message: `${nickname || 'A user'} left the room.`
-  });
+  // If 2+ people remain: Keep room OPEN, send leave notice & update list
+  if (room.clients.size > 1) {
+    const leavePayload = JSON.stringify({
+      type: 'peer-left',
+      clientId,
+      nickname,
+      avatar,
+      reason,
+      message: `${nickname || 'A user'} left the room.`
+    });
 
-  for (const [peerWs] of room.clients.entries()) {
-    if (peerWs.readyState === WebSocket.OPEN) {
-      peerWs.send(leavePayload);
+    for (const [peerWs] of room.clients.entries()) {
+      if (peerWs.readyState === WebSocket.OPEN) {
+        peerWs.send(leavePayload);
+      }
     }
-  }
-
-  // Update room members list
-  if (room.clients.size > 0) {
     broadcastRoomMembers(room);
+  } 
+  // If ONLY 1 person remains (or 0): Close room for the last remaining person & erase from RAM!
+  else if (room.clients.size === 1) {
+    const closePayload = JSON.stringify({
+      type: 'room-closed',
+      reason: 'only-one-remains',
+      message: 'All other members have left the room. Room closed. Nothing was saved.'
+    });
+
+    for (const [lastWs] of room.clients.entries()) {
+      if (lastWs.readyState === WebSocket.OPEN) {
+        lastWs.send(closePayload);
+      }
+      clientState.delete(lastWs);
+    }
+
+    activeRooms.delete(roomId);
   } else {
-    // Erase room from RAM completely when empty
+    // 0 clients left -> Wipe from RAM
     activeRooms.delete(roomId);
   }
 }
@@ -148,7 +160,6 @@ wss.on('connection', (ws) => {
           activeRooms.set(roomId, room);
         }
 
-        // Max 10 users limit check
         if (room.clients.size >= MAX_ROOM_CLIENTS) {
           ws.send(JSON.stringify({
             type: 'error',
@@ -173,7 +184,7 @@ wss.on('connection', (ws) => {
           ...clientInfo
         });
 
-        // Send joined confirmation to new user
+        // Respond to joined user
         ws.send(JSON.stringify({
           type: 'joined',
           clientId: clientInfo.clientId,
@@ -182,7 +193,7 @@ wss.on('connection', (ws) => {
           message: `Joined room! (${room.clients.size}/${MAX_ROOM_CLIENTS} users)`
         }));
 
-        // Broadcast peer-joined notice to existing members
+        // Notify existing members
         for (const [peerWs, info] of room.clients.entries()) {
           if (peerWs !== ws && peerWs.readyState === WebSocket.OPEN) {
             peerWs.send(JSON.stringify({
@@ -195,7 +206,6 @@ wss.on('connection', (ws) => {
           }
         }
 
-        // Send updated member list to everyone
         broadcastRoomMembers(room);
         return;
       }
@@ -206,7 +216,6 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      // Relay all other messages (chat, status, image, screenshot alert, voice call signals)
       const state = clientState.get(ws);
       if (!state) {
         ws.send(JSON.stringify({ type: 'error', message: 'Not connected to any room.' }));
@@ -221,7 +230,6 @@ wss.on('connection', (ws) => {
 
       room.lastActive = Date.now();
 
-      // If targeted to a specific client (WebRTC offer/answer)
       if (data.targetId) {
         for (const [peerWs, info] of room.clients.entries()) {
           if (info.clientId === data.targetId && peerWs.readyState === WebSocket.OPEN) {
@@ -238,7 +246,6 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      // Broadcast relay to all peers in room
       for (const [peerWs] of room.clients.entries()) {
         if (peerWs !== ws && peerWs.readyState === WebSocket.OPEN) {
           peerWs.send(JSON.stringify({
