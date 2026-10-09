@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, X, ShieldAlert, Clock } from 'lucide-react';
 import { decryptBuffer } from '../crypto/webcrypto';
 
 export function ViewOnceImage({
@@ -10,7 +10,7 @@ export function ViewOnceImage({
   onScreenshotAlert
 }) {
   const [isOpened, setIsOpened] = useState(false);
-  const [isPressing, setIsPressing] = useState(false);
+  const [isViewing, setIsViewing] = useState(false);
   const [decryptedBuffer, setDecryptedBuffer] = useState(null);
   const [viewTimeRemaining, setViewTimeRemaining] = useState(30);
   const [isBlownOut, setIsBlownOut] = useState(false);
@@ -40,9 +40,9 @@ export function ViewOnceImage({
     return () => { isMounted = false; };
   }, [imagePayload, secretKey]);
 
-  // 30-Second Active View Timer while holding
+  // 30-Second Active View Timer when user taps to open
   useEffect(() => {
-    if (isPressing && !isOpened && !isBlownOut) {
+    if (isViewing && !isOpened && !isBlownOut) {
       setViewTimeRemaining(30);
       const startTime = Date.now();
 
@@ -52,19 +52,19 @@ export function ViewOnceImage({
         setViewTimeRemaining(remaining);
 
         if (remaining <= 0) {
-          handleFinishView('30s Timer expired');
+          finishAndErase('30s Timer expired');
         }
-      }, 500);
+      }, 300);
 
       return () => {
         if (timerRef.current) clearInterval(timerRef.current);
       };
     }
-  }, [isPressing, isOpened, isBlownOut]);
+  }, [isViewing, isOpened, isBlownOut]);
 
   // Canvas Rendering & Moving Watermark
   useEffect(() => {
-    if (!isPressing || !decryptedBuffer || isOpened || isBlownOut) {
+    if (!isViewing || !decryptedBuffer || isOpened || isBlownOut) {
       if (canvasRef.current) {
         const ctx = canvasRef.current.getContext('2d');
         ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
@@ -90,7 +90,7 @@ export function ViewOnceImage({
       canvas.height = img.height;
 
       const renderFrame = () => {
-        if (!isPressing || isBlownOut) {
+        if (!isViewing || isBlownOut) {
           ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           return;
@@ -98,6 +98,7 @@ export function ViewOnceImage({
 
         ctx.drawImage(img, 0, 0);
 
+        // Overlay Moving Watermark
         ctx.save();
         ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
         ctx.font = 'bold 18px sans-serif';
@@ -127,11 +128,11 @@ export function ViewOnceImage({
         cancelAnimationFrame(watermarkAnimRef.current);
       }
     };
-  }, [isPressing, decryptedBuffer, isOpened, isBlownOut, roomId]);
+  }, [isViewing, decryptedBuffer, isOpened, isBlownOut, roomId]);
 
   // Screenshot shortcut detection
   useEffect(() => {
-    if (!isPressing || isOpened) return;
+    if (!isViewing || isOpened) return;
 
     const handleKeyDown = (e) => {
       if (
@@ -147,11 +148,11 @@ export function ViewOnceImage({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isPressing, isOpened]);
+  }, [isViewing, isOpened]);
 
   const triggerScreenshotAlert = (reason) => {
     setIsBlownOut(true);
-    setIsPressing(false);
+    setIsViewing(false);
     setIsOpened(true);
     setDecryptedBuffer(null);
 
@@ -163,28 +164,20 @@ export function ViewOnceImage({
     }
   };
 
-  const handleFinishView = (reason) => {
-    if (isPressing) {
-      setIsPressing(false);
-      setIsOpened(true);
-      setDecryptedBuffer(null); // PURGE RAM IMMEDIATELY
+  const finishAndErase = (reason) => {
+    setIsViewing(false);
+    setIsOpened(true);
+    setDecryptedBuffer(null); // PURGE RAM IMMEDIATELY
 
-      if (onOpenedSignal) {
-        onOpenedSignal(imagePayload.id);
-      }
+    if (onOpenedSignal) {
+      onOpenedSignal(imagePayload.id);
     }
   };
 
-  const handlePressStart = (e) => {
-    if (e.cancelable) e.preventDefault();
-    if (!isOpened && !isBlownOut) {
-      setIsPressing(true);
+  const handleStartView = () => {
+    if (!isOpened && !isBlownOut && decryptedBuffer) {
+      setIsViewing(true);
     }
-  };
-
-  const handlePressEnd = (e) => {
-    if (e.cancelable) e.preventDefault();
-    handleFinishView('Released');
   };
 
   if (isOpened || imagePayload.status === 'opened') {
@@ -198,66 +191,99 @@ export function ViewOnceImage({
     );
   }
 
-  return (
-    <div
-      className="view-once-box"
-      onMouseDown={handlePressStart}
-      onMouseUp={handlePressEnd}
-      onMouseLeave={handlePressEnd}
-      onTouchStart={handlePressStart}
-      onTouchEnd={handlePressEnd}
-      onTouchCancel={handlePressEnd}
-      style={{
-        border: isPressing ? '1px solid var(--color-blue-status)' : '1px solid var(--card-border)',
-        touchAction: 'none'
-      }}
-    >
-      <canvas
-        ref={canvasRef}
+  // Active Viewing Mode with 30s Countdown
+  if (isViewing) {
+    return (
+      <div
+        className="view-once-box"
         style={{
-          display: isPressing && !isBlownOut ? 'block' : 'none',
-          pointerEvents: 'none'
+          width: '260px',
+          height: '240px',
+          border: '1px solid var(--color-blue-status)',
+          position: 'relative'
         }}
-      />
+      >
+        <canvas
+          ref={canvasRef}
+          style={{ width: '100%', height: '100%', display: isBlownOut ? 'none' : 'block' }}
+        />
 
-      {isPressing && (
+        {/* Top Bar: 30s Countdown Badge & Close Button */}
         <div style={{
           position: 'absolute',
           top: '8px',
+          left: '8px',
           right: '8px',
-          backgroundColor: 'rgba(0, 0, 0, 0.75)',
-          color: '#ffffff',
-          padding: '2px 8px',
-          borderRadius: '10px',
-          fontSize: '11px',
-          fontWeight: '600',
-          zIndex: 5
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          zIndex: 10
         }}>
-          {viewTimeRemaining}s left
-        </div>
-      )}
-
-      {!isPressing && (
-        <>
           <div style={{
-            width: '40px',
-            height: '40px',
-            borderRadius: '50%',
-            backgroundColor: 'rgba(255, 255, 255, 0.08)',
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            color: '#29b6f6',
+            border: '1px solid rgba(41, 182, 246, 0.4)',
+            padding: '3px 10px',
+            borderRadius: '12px',
+            fontSize: '12px',
+            fontWeight: '600',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center'
+            gap: '5px'
           }}>
-            <Eye size={20} color="#ffffff" />
+            <Clock size={13} />
+            <span>{viewTimeRemaining}s left</span>
           </div>
-          <span style={{ color: '#ffffff', fontSize: '13px', fontWeight: '500' }}>
-            Press & hold to view (max 30s)
-          </span>
-          <span style={{ color: '#8e8e98', fontSize: '11px' }}>
-            View once • Screenshot protected
-          </span>
-        </>
-      )}
+
+          <button
+            type="button"
+            onClick={() => finishAndErase('User closed')}
+            style={{
+              backgroundColor: 'rgba(0, 0, 0, 0.8)',
+              color: '#ffffff',
+              border: '1px solid var(--card-border)',
+              borderRadius: '50%',
+              width: '28px',
+              height: '28px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title="Close and erase image"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Initial Closed State: Click / Tap to Open
+  return (
+    <div
+      className="view-once-box"
+      onClick={handleStartView}
+      style={{
+        cursor: decryptedBuffer ? 'pointer' : 'wait'
+      }}
+    >
+      <div style={{
+        width: '44px',
+        height: '44px',
+        borderRadius: '50%',
+        backgroundColor: 'rgba(255, 255, 255, 0.08)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}>
+        <Eye size={22} color="#ffffff" />
+      </div>
+      <span style={{ color: '#ffffff', fontSize: '14px', fontWeight: '600' }}>
+        Tap to view image
+      </span>
+      <span style={{ color: '#8e8e98', fontSize: '11px' }}>
+        Full 30s timer • Auto-erases
+      </span>
     </div>
   );
 }
